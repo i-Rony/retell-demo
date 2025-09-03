@@ -1,6 +1,6 @@
 # AI Voice Agent Demo
 
-This is a frontend demo for an AI Voice Agent administrative tool built with React, TypeScript, Vite, and Tailwind CSS.
+This is a demo for an AI Voice Agent administrative tool built with React, TypeScript, Vite, Tailwind CSS and FastAPI.
 
 ## ✅ Completed Features
 
@@ -130,6 +130,3 @@ The demo is fully responsive and works seamlessly on:
 - **Toast Notifications**: Success and error feedback system
 - **Micro-interactions**: Smooth transitions and hover effects
 
----
-
-**Ready for backend integration and production deployment!** 🚀
