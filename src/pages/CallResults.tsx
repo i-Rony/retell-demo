@@ -8,7 +8,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { useCallStore, callSelectors } from "@/stores/callStore";
 import { useAgentStore } from "@/stores/agentStore";
 import { useShallow } from 'zustand/react/shallow';
-import { clearRetellLocalStorage } from "@/utils/localStorage";
 import { 
   Search, 
   Play, 
@@ -31,7 +30,7 @@ export default function CallResults() {
   const statusFilter = useCallStore(callSelectors.statusFilter);
   const isLoading = useCallStore((state) => state.isLoading);
   const error = useCallStore((state) => state.error);
-  const { setSearchTerm, setStatusFilter, fetchCallDetails, fetchCalls, clearLocalStorage } = useCallStore();
+  const { setSearchTerm, setStatusFilter, fetchCallDetails, ensureCallsLoaded, invalidateCache } = useCallStore();
   
   // Agent store for fetching agents
   const { fetchAgents } = useAgentStore();
@@ -40,23 +39,15 @@ export default function CallResults() {
   const [loadingDetailCallId, setLoadingDetailCallId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  // Clear localStorage and fetch fresh data from API
+  // Load data efficiently with caching
   useEffect(() => {
     const initializeData = async () => {
-      console.log('🗑️ CallResults: Clearing localStorage and fetching fresh data from API');
-      
-      // Clear any existing localStorage data (global utility)
-      clearRetellLocalStorage();
-      
-      // Also clear from Zustand store
-      clearLocalStorage();
-      
-      // Fetch fresh data from API
-      await Promise.all([fetchCalls(), fetchAgents()]);
+      // Use cached data when possible, only fetch if stale
+      await Promise.all([ensureCallsLoaded(), fetchAgents()]);
     };
     
     initializeData();
-  }, [fetchCalls, fetchAgents, clearLocalStorage]);
+  }, [ensureCallsLoaded, fetchAgents]);
 
   // Function to handle viewing call details
   const handleViewDetails = async (callId: string) => {
@@ -74,10 +65,9 @@ export default function CallResults() {
 
   // Function to refresh data from API
   const handleRefreshData = async () => {
-    console.log('🔄 Manually refreshing call and agent data from API');
-    clearRetellLocalStorage();
-    clearLocalStorage();
-    await Promise.all([fetchCalls(), fetchAgents()]);
+    // Invalidate cache and force refresh
+    invalidateCache();
+    await Promise.all([ensureCallsLoaded(), fetchAgents()]);
   };
 
 
@@ -427,7 +417,6 @@ export default function CallResults() {
                             className="flex-1 min-w-[140px]"
                             onClick={() => {
                               // In a real implementation, this would play the recording_url from the API
-                              console.log('Playing recording for call:', call.id);
                               // You could open recording_url in a new tab or use an audio player
                             }}
                             disabled={!call.transcript || call.transcript.length === 0}
@@ -441,7 +430,6 @@ export default function CallResults() {
                             className="flex-1 min-w-[140px]"
                             onClick={() => {
                               // In a real implementation, this would download the recording_url from the API
-                              console.log('Downloading recording for call:', call.id);
                             }}
                             disabled={!call.transcript || call.transcript.length === 0}
                           >

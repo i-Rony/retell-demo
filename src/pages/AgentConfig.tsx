@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Edit, Play, Trash2, Plus } from "lucide-react";
 import AgentConfigForm from "@/components/forms/AgentConfigForm";
 import { useAgentStore, agentSelectors } from "@/stores/agentStore";
+import { useVoiceStore } from "@/stores/voiceStore";
+import { useCallStore } from "@/stores/callStore";
 import { useShallow } from 'zustand/react/shallow';
 import { toast } from "sonner";
 
@@ -17,94 +19,39 @@ export default function AgentConfig() {
   const agentStats = useAgentStore(useShallow((state) => state.getAgentStats()));
   const isLoading = useAgentStore((state) => state.isLoading);
   const error = useAgentStore((state) => state.error);
-  const { deleteAgent, fetchAgents } = useAgentStore();
+  const { deleteAgent, fetchAgents, ensureAgentsLoaded } = useAgentStore();
+  const { previewVoice, ensureVoicesLoaded, stopCurrentAudio } = useVoiceStore();
+  const callStats = useCallStore(useShallow((state) => state.getCallStats()));
+  const { ensureCallsLoaded } = useCallStore();
 
-  // Voice preview function with better mapping
-  const playVoicePreview = (agent: any) => {
-    const utterance = new SpeechSynthesisUtterance(`Hello, this is ${agent.name}. I'm ready to help with your dispatch needs.`);
-    utterance.rate = agent.speed || 1.0;
-    utterance.volume = agent.volume || 1.0;
-    
-    // Function to get voices (handles loading state)
-    const getVoicesAndSpeak = () => {
-      const voices = speechSynthesis.getVoices();
-      
-      if (voices.length === 0) {
-        // Voices not loaded yet, try again after a delay
-        setTimeout(getVoicesAndSpeak, 100);
-        return;
-      }
-      
-      console.log('Available voices:', voices.map(v => ({ name: v.name, lang: v.lang, gender: v.name })));
-      
-      const voiceId = agent.voice.toLowerCase();
-      let matchingVoice = null;
-      
-      // More comprehensive voice mapping
-      if (voiceId.includes('julia') || voiceId.includes('shimmer') || voiceId.includes('nova') || voiceId.includes('echo')) {
-        // Female voices - try multiple patterns
-        matchingVoice = voices.find(voice => {
-          const name = voice.name.toLowerCase();
-          return name.includes('female') || 
-                 name.includes('woman') || 
-                 name.includes('samantha') || 
-                 name.includes('victoria') || 
-                 name.includes('karen') || 
-                 name.includes('zira') || 
-                 name.includes('susan') ||
-                 name.includes('fiona');
-        });
-      } else {
-        // Male voices
-        matchingVoice = voices.find(voice => {
-          const name = voice.name.toLowerCase();
-          return name.includes('male') || 
-                 name.includes('man') || 
-                 name.includes('david') || 
-                 name.includes('mark') || 
-                 name.includes('daniel') || 
-                 name.includes('alex') ||
-                 name.includes('fred');
-        });
-      }
-      
-      // Final fallback - get the best English voice
-      if (!matchingVoice) {
-        matchingVoice = voices.find(voice => voice.lang.startsWith('en')) || voices[0];
-      }
-      
-      if (matchingVoice) {
-        utterance.voice = matchingVoice;
-        console.log(`Using voice: ${matchingVoice.name} for agent voice: ${agent.voice}`);
-      }
-      
-      speechSynthesis.speak(utterance);
-    };
-    
-    getVoicesAndSpeak();
-    
-    toast.success("Voice Preview", {
-      description: `Playing ${agent.voice} voice preview for ${agent.name}`
-    });
-  };
-
-  // Fetch agents from Retell API and load voices on component mount
-  useEffect(() => {
-    console.log('🔄 AgentConfig: Loading agents from Retell API...');
-    fetchAgents();
-    
-    // Load speech synthesis voices
-    if (speechSynthesis.getVoices().length === 0) {
-      speechSynthesis.addEventListener('voiceschanged', () => {
-        const voices = speechSynthesis.getVoices();
-        console.log('🎤 Available system voices:', voices.map(v => ({ 
-          name: v.name, 
-          lang: v.lang, 
-          gender: v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('woman') ? 'female' : 'male'
-        })));
+  // Voice preview function using centralized audio management
+  const playVoicePreview = async (agent: any) => {
+    try {
+      await previewVoice(agent.voice);
+      toast.success("Voice Preview", {
+        description: `Playing ${agent.voice} preview for ${agent.name}`
+      });
+    } catch (error) {
+      toast.error("Preview Failed", {
+        description: error instanceof Error ? error.message : "Could not play voice preview"
       });
     }
-  }, [fetchAgents]);
+  };
+
+  // Cleanup audio on component unmount
+  useEffect(() => {
+    return () => {
+      stopCurrentAudio();
+    };
+  }, [stopCurrentAudio]);
+
+
+  // Fetch agents, voices, and calls on component mount
+  useEffect(() => {
+    ensureAgentsLoaded();
+    ensureVoicesLoaded();
+    ensureCallsLoaded();
+  }, [ensureAgentsLoaded, ensureVoicesLoaded, ensureCallsLoaded]);
 
   if (selectedAgent || isCreating) {
     const agent = agents.find(a => a.id === selectedAgent);
@@ -216,14 +163,10 @@ export default function AgentConfig() {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                <div className="grid grid-cols-2 text-sm">
+                <div className="text-sm">
                   <div>
                     <p className="text-muted-foreground">Voice</p>
                     <p className="font-medium">{agent.voice}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Calls Today</p>
-                    <p className="font-medium">{agent.callsToday}</p>
                   </div>
                 </div>
                 
@@ -279,15 +222,19 @@ export default function AgentConfig() {
         <CardContent>
           <div className="grid gap-6 grid-cols-2 md:grid-cols-4">
             <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold">{agentStats.totalCallsToday}</p>
-              <p className="text-sm text-muted-foreground">Total Calls Today</p>
+              <p className="text-2xl sm:text-3xl font-bold">{callStats.total}</p>
+              <p className="text-sm text-muted-foreground">Total Calls</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold">89%</p>
+              <p className="text-2xl sm:text-3xl font-bold">
+                {callStats.total > 0 ? `${callStats.successRate}%` : '--'}
+              </p>
               <p className="text-sm text-muted-foreground">Success Rate</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl sm:text-3xl font-bold">2:31</p>
+              <p className="text-2xl sm:text-3xl font-bold">
+                {callStats.total > 0 ? callStats.avgDuration : '--'}
+              </p>
               <p className="text-sm text-muted-foreground">Avg Duration</p>
             </div>
             <div className="text-center">

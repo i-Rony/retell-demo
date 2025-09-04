@@ -1,7 +1,7 @@
 // API Service for connecting to FastAPI backend
 // TODO: Replace demo endpoints with real Retell integration when ready
 
-const API_BASE_URL = 'https://cb308c9e8108.ngrok-free.app/api/v1';
+const API_BASE_URL = 'https://563b616714b0.ngrok-free.app/api/v1';
 
 // Generic API request handler
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -136,6 +136,17 @@ export const callApi = {
       method: 'POST',
     });
   },
+};
+
+// Voice API endpoints
+export const voiceApi = {
+  // Get all voices
+  getAll: (): Promise<any[]> => 
+    apiRequest('/voices/'),
+
+  // Get voice by ID
+  getById: (id: string): Promise<any> => 
+    apiRequest(`/voices/${id}/`),
 };
 
 // Test API connection
