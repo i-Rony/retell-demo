@@ -16,7 +16,7 @@ import SimpleWebCall from "@/components/SimpleWebCall";
 export default function CallTrigger() {
   const activeAgents = useAgentStore(useShallow((state) => state.getActiveAgents()));
   const { fetchAgents } = useAgentStore();
-  const { addCall, updateCall, fetchCalls } = useCallStore();
+  const { addCall, updateCall, ensureCallsLoaded } = useCallStore();
   const recentCalls = useCallStore(useShallow((state) => 
     state.calls
       .slice()
@@ -26,9 +26,8 @@ export default function CallTrigger() {
 
   // Ensure agents and calls are loaded for the dropdown and recent calls display
   useEffect(() => {
-    console.log('🔄 CallTrigger: Ensuring agents and calls are loaded...');
-    Promise.all([fetchAgents(), fetchCalls()]);
-  }, []); // Remove dependencies to prevent infinite re-renders
+    Promise.all([fetchAgents(), ensureCallsLoaded()]);
+  }, [fetchAgents, ensureCallsLoaded]); // Proper dependencies
   
   const [formData, setFormData] = useState({
     driverName: "",
@@ -107,7 +106,6 @@ export default function CallTrigger() {
     };
 
     const newCall = addCall(callData);
-    console.log(`📋 Added ${callType} call to store:`, newCall);
     return newCall;
   };
 
@@ -121,13 +119,6 @@ export default function CallTrigger() {
     let callStoreId: string | null = null;
     
     try {
-      console.log('📞 PHONE CALL: Initiating call via Retell AI...');
-      console.log('📋 Call Data:', {
-        driverName: formData.driverName,
-        phoneNumber: formData.phoneNumber,
-        loadNumber: formData.loadNumber,
-        agentId: formData.selectedAgent
-      });
       
       // Add call to store first
       const newCall = addCallToStore('phone');
@@ -142,8 +133,6 @@ export default function CallTrigger() {
         loadNumber: formData.loadNumber,
         agentId: formData.selectedAgent
       });
-      
-      console.log('✅ Phone call result:', result);
       
       // Update call store with actual call ID and status
       if (callStoreId) {
@@ -172,8 +161,6 @@ export default function CallTrigger() {
       });
       
     } catch (error) {
-      console.error('❌ Phone call failed:', error);
-      
       // Update call store with failure
       if (callStoreId) {
         updateCall(callStoreId, {
@@ -202,13 +189,6 @@ export default function CallTrigger() {
     let callStoreId: string | null = null;
     
     try {
-      console.log('🌐 WEB CALL: Creating web call session...');
-      console.log('📋 Call Data:', {
-        driverName: formData.driverName,
-        phoneNumber: formData.phoneNumber,
-        loadNumber: formData.loadNumber,
-        agentId: formData.selectedAgent
-      });
       
       // Add call to store first
       const newCall = addCallToStore('web');
@@ -224,7 +204,6 @@ export default function CallTrigger() {
         agentId: formData.selectedAgent
       });
       
-      console.log('✅ Web call result:', result);
       
       // Update call store with actual call ID and status
       if (callStoreId) {
@@ -243,7 +222,6 @@ export default function CallTrigger() {
         loadNumber: formData.loadNumber
       };
       
-      console.log('🚀 Setting webCallData:', webCallInfo);
       setWebCallData(webCallInfo);
       
       toast.success("🌐 Web call session created! Starting connection...");
@@ -254,7 +232,6 @@ export default function CallTrigger() {
       // Don't reset form here - only reset when call actually ends in handleWebCallEnd
       
     } catch (error) {
-      console.error('❌ Web call failed:', error);
       
       // Update call store with failure
       if (callStoreId) {
@@ -275,20 +252,9 @@ export default function CallTrigger() {
   };
 
   const handleWebCallEnd = (callData?: { transcript: any[], duration: number }) => {
-    console.log('📞 CALLTRIGGER: handleWebCallEnd called with:', {
-      hasCallData: !!callData,
-      currentCallStoreId,
-      transcriptLength: callData?.transcript.length || 0,
-      duration: callData?.duration || 0
-    });
     
     // Save transcript and call completion data to store if available
     if (currentCallStoreId && callData) {
-      console.log('💾 Saving call data to store:', { 
-        callId: currentCallStoreId, 
-        transcriptLength: callData.transcript.length,
-        duration: callData.duration 
-      });
       
       // Convert transcript format from SimpleWebCall to store format
       const storeTranscript: CallTranscriptEntry[] = callData.transcript.map(entry => ({
@@ -330,9 +296,7 @@ export default function CallTrigger() {
 
   // Debug: Log webCallData changes
   useEffect(() => {
-    if (webCallData) {
-      console.log('🔍 CallTrigger - webCallData set:', webCallData);
-    }
+    // Monitor webCallData changes
   }, [webCallData]);
 
   return (

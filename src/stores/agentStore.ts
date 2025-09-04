@@ -31,6 +31,7 @@ export interface AgentState {
   selectedAgent: Agent | null
   isLoading: boolean
   error: string | null
+  lastFetched: number | null // Timestamp of last successful fetch
   
   // Actions
   setAgents: (agents: Agent[]) => void
@@ -41,7 +42,9 @@ export interface AgentState {
   duplicateAgent: (id: string) => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
-  fetchAgents: () => Promise<void>
+  fetchAgents: (forceRefresh?: boolean) => Promise<void>
+  ensureAgentsLoaded: () => Promise<void>
+  invalidateCache: () => void
   
   // Computed getters
   getAgentById: (id: string) => Agent | undefined
@@ -53,196 +56,35 @@ export interface AgentState {
   }
 }
 
-// Default agent template
-const createDefaultAgent = (overrides: Partial<Agent> = {}): Omit<Agent, 'id' | 'createdAt' | 'updatedAt' | 'callsToday'> => ({
-  name: 'New Agent',
-  description: 'AI voice agent for customer interactions',
-  voice: 'alloy',
-  temperature: 0.7,
-  speed: 1.0,
-  volume: 1.0,
-  prompt: `Role & Persona
-You are Dispatch, an AI voice agent responsible for calling truck drivers to perform check calls about their current status and safety. Speak in a natural, calm, and professional tone, like a helpful dispatcher. Use short, clear sentences. Use occasional filler words and backchanneling ("okay," "I see," "got it") to sound human. Be patient but stay on track.
+// Cache duration: 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
+const STORAGE_KEY = 'retell_agents_cache';
 
-IMPORTANT CONTEXT: You already have this driver information:
-- Driver Name: {{driver_name}}
-- Phone Number: {{phone_number}}
-- Load Number: {{load_number}}
+// Load cached data from localStorage
+const loadCachedAgents = (): { agents: Agent[]; lastFetched: number } | null => {
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      const data = JSON.parse(cached);
+      // Check if cache is still valid (within CACHE_DURATION)
+      if (Date.now() - data.lastFetched < CACHE_DURATION) {
+        return data;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load cached agents:', error);
+  }
+  return null;
+};
 
-Do NOT ask for this information since you already have it. Use it to personalize the conversation.
-
-Core Objectives
-Greet the driver by name and reference the load number.
-Collect all required structured information for the dispatch system.
-If an emergency is mentioned, immediately abandon the normal script and switch to Emergency Escalation mode.
-If the driver is uncooperative, noisy, or gives conflicting info, handle gracefully.
-At the end of the call, confirm you will update Dispatch and thank the driver.
-
-Conversation Flow – Normal Check-In
-Start: "Hi {{driver_name}}, this is Dispatch with a check call on load {{load_number}}. Can you give me an update on your status?"
-
-Based on response, adapt:
-If in transit: Ask for current location and ETA.
-If delayed: Ask reason for delay and updated ETA.
-If arrived: Ask if unloading has started, and confirm unloading status.
-End: Remind driver to send proof of delivery (POD) after unloading. Confirm acknowledgment.
-
-Structured Data to Collect (Normal Call):
-call_outcome: "In-Transit Update" OR "Arrival Confirmation"
-driver_status: "Driving" OR "Delayed" OR "Arrived" OR "Unloading"
-current_location: text
-eta: text
-delay_reason: "Traffic" / "Weather" / "Mechanical" / "Other" / "None"
-unloading_status: text or "N/A"
-pod_reminder_acknowledged: true/false
-
-Conversation Flow – Emergency Escalation
-If the driver says anything about an emergency (e.g., "accident," "blowout," "medical issue"):
-
-Interrupt and switch to emergency mode.
-Calmly confirm safety: "Are you and everyone else safe right now?"
-Ask emergency type (Accident / Breakdown / Medical / Other).
-Ask location.
-Ask if load is secure.
-Reassure: "Thank you, I'm connecting you to a live dispatcher immediately."
-End normal conversation thread.
-
-Structured Data to Collect (Emergency Call):
-call_outcome: "Emergency Escalation"
-emergency_type: "Accident" OR "Breakdown" OR "Medical" OR "Other"
-safety_status: text
-injury_status: text
-emergency_location: text
-load_secure: true/false
-escalation_status: "Connected to Human Dispatcher"
-
-Special Handling Rules
-Uncooperative Driver: If driver only gives one-word answers ("good," "fine"), politely probe: "Could you tell me where you are right now?" If still unresponsive after 3 attempts, say: "Okay, I'll note this check call as incomplete and a dispatcher will follow up. Thank you." End call.
-Noisy Environment: If speech-to-text is unclear, politely ask them to repeat. If unclear 3 times, escalate: "I'm having trouble hearing you. Let me connect you to a dispatcher directly."
-Conflicting Info: If driver's stated location doesn't match GPS, don't confront. Say: "Thanks for the update, I'll make a note of that." Log discrepancy in transcript.
-
-Style Guidelines
-Always speak respectfully and clearly.
-Use short, natural sentences (avoid robotic wording).
-Allow the driver to interrupt; pause when they do.
-Never argue or push aggressively.
-Prioritize safety over routine check-in if an emergency arises.`,
-  backchannelEnabled: true,
-  backchannelFrequency: 0.8,
-  backchannelWords: ['mm-hmm', 'okay', 'I see', 'right'],
-  interruptionSensitivity: 0.7,
-  responsiveness: 0.9,
-  pronunciation: [],
-  boostedKeywords: [],
-  status: 'draft',
-  ...overrides,
-})
-
-// Fallback demo data (used when API fails)
-const initialAgents: Agent[] = [
-  {
-    id: 'agent_afb90a0fbe9473fc964f9cf979',
-    ...createDefaultAgent({
-      name: 'Driver Check-in Agent',
-      description: 'Handles driver check-in calls for logistics scenarios',
-      status: 'active',
-      prompt: `Role & Persona
-You are Dispatch, an AI voice agent responsible for calling truck drivers to perform check calls about their current status and safety. Speak in a natural, calm, and professional tone, like a helpful dispatcher. Use short, clear sentences. Use occasional filler words and backchanneling ("okay," "I see," "got it") to sound human. Be patient but stay on track.
-
-IMPORTANT CONTEXT: You already have this driver information:
-- Driver Name: {{driver_name}}
-- Phone Number: {{phone_number}}
-- Load Number: {{load_number}}
-
-Do NOT ask for this information since you already have it. Use it to personalize the conversation.
-
-Core Objectives
-Greet the driver by name and reference the load number.
-Collect all required structured information for the dispatch system.
-If an emergency is mentioned, immediately abandon the normal script and switch to Emergency Escalation mode.
-If the driver is uncooperative, noisy, or gives conflicting info, handle gracefully.
-At the end of the call, confirm you will update Dispatch and thank the driver.
-
-Conversation Flow – Normal Check-In
-Start: "Hi {{driver_name}}, this is Dispatch with a check call on load {{load_number}}. Can you give me an update on your status?"
-
-Based on response, adapt:
-If in transit: Ask for current location and ETA.
-If delayed: Ask reason for delay and updated ETA.
-If arrived: Ask if unloading has started, and confirm unloading status.
-End: Remind driver to send proof of delivery (POD) after unloading. Confirm acknowledgment.
-
-Structured Data to Collect (Normal Call):
-call_outcome: "In-Transit Update" OR "Arrival Confirmation"
-driver_status: "Driving" OR "Delayed" OR "Arrived" OR "Unloading"
-current_location: text
-eta: text
-delay_reason: "Traffic" / "Weather" / "Mechanical" / "Other" / "None"
-unloading_status: text or "N/A"
-pod_reminder_acknowledged: true/false
-
-Conversation Flow – Emergency Escalation
-If the driver says anything about an emergency (e.g., "accident," "blowout," "medical issue"):
-
-Interrupt and switch to emergency mode.
-Calmly confirm safety: "Are you and everyone else safe right now?"
-Ask emergency type (Accident / Breakdown / Medical / Other).
-Ask location.
-Ask if load is secure.
-Reassure: "Thank you, I'm connecting you to a live dispatcher immediately."
-End normal conversation thread.
-
-Structured Data to Collect (Emergency Call):
-call_outcome: "Emergency Escalation"
-emergency_type: "Accident" OR "Breakdown" OR "Medical" OR "Other"
-safety_status: text
-injury_status: text
-emergency_location: text
-load_secure: true/false
-escalation_status: "Connected to Human Dispatcher"
-
-Special Handling Rules
-Uncooperative Driver: If driver only gives one-word answers ("good," "fine"), politely probe: "Could you tell me where you are right now?" If still unresponsive after 3 attempts, say: "Okay, I'll note this check call as incomplete and a dispatcher will follow up. Thank you." End call.
-Noisy Environment: If speech-to-text is unclear, politely ask them to repeat. If unclear 3 times, escalate: "I'm having trouble hearing you. Let me connect you to a dispatcher directly."
-Conflicting Info: If driver's stated location doesn't match GPS, don't confront. Say: "Thanks for the update, I'll make a note of that." Log discrepancy in transcript.
-
-Style Guidelines
-Always speak respectfully and clearly.
-Use short, natural sentences (avoid robotic wording).
-Allow the driver to interrupt; pause when they do.
-Never argue or push aggressively.
-Prioritize safety over routine check-in if an emergency arises.`,
-      boostedKeywords: ['delivery', 'pickup', 'location', 'driver', 'load', 'ETA']
-    }),
-    createdAt: '2024-01-14T10:00:00Z',
-    updatedAt: '2024-01-15T14:30:00Z',
-    callsToday: 24,
-  },
-  {
-    id: 'agent-2',
-    ...createDefaultAgent({
-      name: 'Emergency Protocol Agent',
-      description: 'Manages emergency situations and escalations',
-      voice: 'nova',
-      temperature: 0.5,
-      status: 'active',
-      prompt: `You are an emergency response AI assistant. Handle all situations with urgency and clarity.
-
-Your goals:
-1. Quickly assess the emergency situation
-2. Gather critical information (location, nature of emergency)
-3. Provide immediate guidance if safe to do so
-4. Escalate to appropriate emergency services
-5. Keep detailed records of the incident
-
-Prioritize safety above all else. Be calm, authoritative, and efficient.`,
-      boostedKeywords: ['emergency', 'urgent', 'help', 'accident', 'location', 'medical']
-    }),
-    createdAt: '2024-01-13T09:15:00Z',
-    updatedAt: '2024-01-14T16:45:00Z',
-    callsToday: 3,
-  },
-]
+// Save data to localStorage
+const saveCachedAgents = (agents: Agent[], lastFetched: number) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ agents, lastFetched }));
+  } catch (error) {
+    console.warn('Failed to save agents to cache:', error);
+  }
+};
 
 // Helper function to map Retell API response to frontend format  
 const mapBackendAgentToFrontend = (retellAgent: any): Agent => {
@@ -282,39 +124,55 @@ const mapBackendAgentToFrontend = (retellAgent: any): Agent => {
   }
 }
 
+// Initialize with cached data if available
+const cachedData = loadCachedAgents();
+
 // Store implementation
 export const useAgentStore = create<AgentState>()(
   subscribeWithSelector((set, get) => ({
-    // Initial state - Start empty, load from API
-    agents: [],
+    // Initial state - Start with cached data, load from API if cache is stale
+    agents: cachedData?.agents || [],
     selectedAgent: null,
     isLoading: false,
     error: null,
+    lastFetched: cachedData?.lastFetched || null,
 
     // Actions
     setAgents: (agents) => set({ agents }),
 
-    fetchAgents: async () => {
-      console.log('🔄 Loading agents from API...')
-      set({ isLoading: true, error: null })
+    fetchAgents: async (forceRefresh = false) => {
+      const { isLoading, lastFetched } = get();
+      
+      // Don't fetch if already loading
+      if (isLoading) return;
+      
+      // Check if we have fresh cache (unless forcing refresh)
+      if (!forceRefresh && lastFetched && (Date.now() - lastFetched < CACHE_DURATION)) {
+        return;
+      }
+
+      set({ isLoading: true, error: null });
       try {
         const backendAgents = await agentApi.getAll()
         
         // Map backend snake_case response to frontend camelCase
         const mappedAgents: Agent[] = backendAgents.map(mapBackendAgentToFrontend)
+        const timestamp = Date.now();
         
-        set({ agents: mappedAgents, isLoading: false })
-        console.log(`✅ Loaded ${mappedAgents.length} agents from API`)
+        set({ agents: mappedAgents, isLoading: false, lastFetched: timestamp, error: null });
+        
+        // Save to localStorage
+        saveCachedAgents(mappedAgents, timestamp);
       } catch (error) {
-        console.error('❌ Failed to load agents from API:', error)
-        // Fallback to demo agents if API fails
-        console.log('📋 Falling back to demo agents...')
-        set({ agents: initialAgents, isLoading: false, error: 'Failed to load agents from API, showing demo data' })
+        console.error('Failed to fetch agents:', error);
+        set({ 
+          error: error instanceof Error ? error.message : 'Failed to load agents from API', 
+          isLoading: false 
+        });
       }
     },
 
     addAgent: async (agentData) => {
-      console.log('➕ Creating new agent via API...')
       set({ isLoading: true, error: null })
       try {
         // Convert frontend format to Retell API format
@@ -350,16 +208,17 @@ export const useAgentStore = create<AgentState>()(
           agents: [...state.agents, newAgent],
           isLoading: false
         }))
-        console.log(`✅ Created agent: ${newAgent.name}`)
+        
+        // Invalidate cache and refresh from API to get latest data
+        get().invalidateCache();
+        await get().fetchAgents(true);
       } catch (error) {
-        console.error('❌ Failed to create agent:', error)
         set({ error: 'Failed to create agent', isLoading: false })
         throw error
       }
     },
 
     updateAgent: async (id, updates) => {
-      console.log(`📝 Updating agent ${id} via API...`)
       set({ isLoading: true, error: null })
       try {
         // Convert frontend format to Retell API format
@@ -396,16 +255,17 @@ export const useAgentStore = create<AgentState>()(
           ),
           isLoading: false
         }))
-        console.log(`✅ Updated agent: ${updatedAgent.name}`)
+        
+        // Invalidate cache and refresh from API to get latest data
+        get().invalidateCache();
+        await get().fetchAgents(true);
       } catch (error) {
-        console.error('❌ Failed to update agent:', error)
         set({ error: 'Failed to update agent', isLoading: false })
         throw error
       }
     },
 
     deleteAgent: async (id) => {
-      console.log(`🗑️ Deleting agent ${id} via API...`)
       set({ isLoading: true, error: null })
       try {
         await agentApi.delete(id)
@@ -414,9 +274,11 @@ export const useAgentStore = create<AgentState>()(
           selectedAgent: state.selectedAgent?.id === id ? null : state.selectedAgent,
           isLoading: false
         }))
-        console.log(`✅ Deleted agent ${id}`)
+        
+        // Invalidate cache and refresh from API to get latest data
+        get().invalidateCache();
+        await get().fetchAgents(true);
       } catch (error) {
-        console.error('❌ Failed to delete agent:', error)
         set({ error: 'Failed to delete agent', isLoading: false })
       }
     },
@@ -424,7 +286,6 @@ export const useAgentStore = create<AgentState>()(
     selectAgent: (agent) => set({ selectedAgent: agent }),
 
     duplicateAgent: async (id) => {
-      console.log(`📋 Duplicating agent ${id}...`)
       const agent = get().getAgentById(id)
       if (agent) {
         const duplicatedAgent = {
@@ -444,6 +305,21 @@ export const useAgentStore = create<AgentState>()(
 
     setLoading: (loading) => set({ isLoading: loading }),
     setError: (error) => set({ error }),
+
+    ensureAgentsLoaded: async () => {
+      const { lastFetched, isLoading } = get();
+      
+      // Only fetch if we don't have fresh data and not currently loading
+      const isCacheValid = lastFetched && (Date.now() - lastFetched < CACHE_DURATION);
+      if (!isCacheValid && !isLoading) {
+        await get().fetchAgents();
+      }
+    },
+
+    invalidateCache: () => {
+      localStorage.removeItem(STORAGE_KEY);
+      set({ lastFetched: null });
+    },
 
     // Computed getters
     getAgentById: (id) => {

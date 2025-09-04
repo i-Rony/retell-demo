@@ -7,11 +7,9 @@ from datetime import datetime
 
 class RetellService:
     def __init__(self, api_key: str):
-        print(f"🔧 RetellService: Initializing with API key length: {len(api_key) if api_key else 0}")
         if not api_key:
-            raise ValueError("❌ Retell AI API key is required")
+            raise ValueError("Retell AI API key is required")
         self.client = Retell(api_key=api_key)
-        print(f"✅ RetellService: Client initialized successfully")
     
     async def list_agents_raw(self) -> List[dict]:
         """List all agents from Retell AI - returns raw API response"""
@@ -19,8 +17,7 @@ class RetellService:
             response = self.client.agent.list()
             return list(response)  # Convert to list if it's not already
         except Exception as e:
-            print(f"Error listing agents: {e}")
-            return []
+            raise e
     
     async def list_agents(self) -> List[Agent]:
         """List all agents from Retell AI"""
@@ -43,8 +40,7 @@ class RetellService:
                 agents.append(agent)
             return agents
         except Exception as e:
-            print(f"Error listing agents: {e}")
-            return []
+            raise e
     
     async def get_agent(self, agent_id: str) -> Optional[Agent]:
         """Get a specific agent by ID"""
@@ -95,8 +91,7 @@ class RetellService:
                 max_call_duration_ms=agent_dict.get("max_call_duration_ms")
             )
         except Exception as e:
-            print(f"Error getting agent {agent_id}: {e}")
-            return None
+            raise e
     
     async def create_retell_llm(self, prompt: str, model: str = "gpt-4o", temperature: float = 0.1) -> str:
         """Create a Retell LLM with the given prompt and return the LLM ID"""
@@ -116,18 +111,15 @@ class RetellService:
                 ]
             }
             
-            print(f"Creating Retell LLM with params: {llm_params}")
             llm_response = self.client.llm.create(**llm_params)
             
             # Convert response to dict if it's a Pydantic model
             llm_dict = llm_response.model_dump() if hasattr(llm_response, 'model_dump') else llm_response.__dict__
             llm_id = llm_dict.get("llm_id")
             
-            print(f"✅ Created Retell LLM with ID: {llm_id}")
             return llm_id
             
         except Exception as e:
-            print(f"Error creating Retell LLM: {e}")
             raise
 
     async def create_agent(self, agent_data: AgentCreate) -> Agent:
@@ -189,8 +181,6 @@ class RetellService:
             if agent_data.max_call_duration_ms is not None:
                 create_params["max_call_duration_ms"] = agent_data.max_call_duration_ms
             
-            print(f"Creating agent with params: {create_params}")
-            
             # Create agent in Retell AI
             retell_agent = self.client.agent.create(**create_params)
             
@@ -222,7 +212,6 @@ class RetellService:
                 last_modification_timestamp=agent_dict.get("last_modification_timestamp")
             )
         except Exception as e:
-            print(f"Error creating agent: {e}")
             raise
     
     async def update_agent(self, agent_id: str, agent_data: AgentUpdate) -> Optional[Agent]:
@@ -284,8 +273,6 @@ class RetellService:
             if agent_data.max_call_duration_ms is not None:
                 update_params["max_call_duration_ms"] = agent_data.max_call_duration_ms
             
-            print(f"Updating agent {agent_id} with params: {update_params}")
-            
             retell_agent = self.client.agent.update(agent_id, **update_params)
             
             # Convert response to dict if it's a Pydantic model
@@ -325,8 +312,7 @@ class RetellService:
                 last_modification_timestamp=agent_dict.get("last_modification_timestamp")
             )
         except Exception as e:
-            print(f"Error updating agent {agent_id}: {e}")
-            return None
+            raise e
     
     async def delete_agent(self, agent_id: str) -> bool:
         """Delete an agent"""
@@ -334,8 +320,7 @@ class RetellService:
             self.client.agent.delete(agent_id)
             return True
         except Exception as e:
-            print(f"Error deleting agent {agent_id}: {e}")
-            return False
+            raise e
     
     async def get_agent_versions(self, agent_id: str) -> List[dict]:
         """Get all versions of an agent"""
@@ -343,8 +328,7 @@ class RetellService:
             versions = self.client.agent.get_versions(agent_id)
             return list(versions) if versions else []
         except Exception as e:
-            print(f"Error getting agent versions for {agent_id}: {e}")
-            return []
+            raise e
     
     async def get_retell_llm(self, llm_id: str) -> Optional[dict]:
         """Get Retell LLM details by ID"""
@@ -353,8 +337,7 @@ class RetellService:
             llm_dict = llm_response.model_dump() if hasattr(llm_response, 'model_dump') else llm_response.__dict__
             return llm_dict
         except Exception as e:
-            print(f"Error getting LLM {llm_id}: {e}")
-            return None
+            raise e
     
     async def list_retell_llms(self) -> List[dict]:
         """List all Retell LLMs"""
@@ -362,8 +345,7 @@ class RetellService:
             llms = self.client.llm.list()
             return list(llms) if llms else []
         except Exception as e:
-            print(f"Error listing LLMs: {e}")
-            return []
+            raise e
     
     async def create_phone_call(self, call_data: CallCreate) -> Call:
         """Create/initiate a new phone call"""
@@ -399,7 +381,6 @@ class RetellService:
                 timestamp=datetime.now()
             )
         except Exception as e:
-            print(f"Error creating phone call: {e}")
             raise
     
     async def create_web_call(self, agent_id: str, dynamic_variables: dict = None) -> dict:
@@ -411,11 +392,6 @@ class RetellService:
                 retell_llm_dynamic_variables=dynamic_variables or {}
             )
             
-            print(f"✅ Web call created successfully:")
-            print(f"📞 Call ID: {web_call_response.call_id}")
-            print(f"🔑 Access Token: {web_call_response.access_token[:20]}...")
-            print(f"🚀 Ready for browser connection!")
-            
             return {
                 "call_id": web_call_response.call_id,
                 "access_token": web_call_response.access_token,
@@ -424,7 +400,6 @@ class RetellService:
             }
             
         except Exception as e:
-            print(f"Error creating web call: {e}")
             raise
     
     async def create_simple_phone_call(self, to_number: str, agent_id: str, dynamic_variables: dict = None) -> dict:
@@ -438,12 +413,6 @@ class RetellService:
                 retell_llm_dynamic_variables=dynamic_variables or {}
             )
             
-            print(f"✅ Phone call initiated successfully:")
-            print(f"📞 Call ID: {phone_call_response.call_id}")
-            print(f"📱 From: +15103183385")
-            print(f"📱 To: {to_number}")
-            print(f"🤖 Agent: {agent_id}")
-            
             return {
                 "call_id": phone_call_response.call_id,
                 "agent_id": phone_call_response.agent_id,
@@ -454,7 +423,6 @@ class RetellService:
             }
             
         except Exception as e:
-            print(f"Error creating phone call: {e}")
             raise
     
     async def get_call(self, call_id: str) -> Optional[Call]:
@@ -535,32 +503,16 @@ class RetellService:
                 notes=dynamic_vars.get("notes")
             )
         except Exception as e:
-            print(f"Error getting call {call_id}: {e}")
-            return None
+            raise e
     
     async def list_calls(self) -> List[Call]:
         """List all calls from Retell AI using client.call.list()"""
         try:
-            print(f"🔍 Calling Retell AI list calls API...")
-            print(f"🔑 Using API key: {self.client.api_key[:20]}..." if self.client.api_key else "❌ No API key")
-            
             response = self.client.call.list()
             response_list = list(response)
-            print(f"📊 Retell AI returned {len(response_list)} calls")
             
             if len(response_list) == 0:
-                print("ℹ️ No calls found in Retell AI account")
-                print("💡 Note: Make sure calls exist in your Retell AI dashboard")
                 return []
-            
-            # Debug: print first call structure  
-            first_call = response_list[0]
-            # Convert Pydantic model to dictionary for debugging
-            first_call_dict = first_call.model_dump() if hasattr(first_call, 'model_dump') else first_call.__dict__
-            print(f"📋 Sample call structure keys: {list(first_call_dict.keys())}")
-            print(f"📋 Sample call ID: {getattr(first_call, 'call_id', 'unknown')}")
-            print(f"📋 Sample call status: {getattr(first_call, 'call_status', 'unknown')}")
-            print(f"📋 Sample call type: {type(first_call)}")
             
             calls = []
             for call_obj in response_list:
@@ -619,16 +571,10 @@ class RetellService:
                     notes=dynamic_vars.get("notes")
                 )
                 calls.append(call)
-                print(f"✅ Processed call: {driver_name} - {load_number} - {status}")
                 
-            print(f"🎉 Successfully converted {len(calls)} calls from Retell AI format")
             return calls
         except Exception as e:
-            print(f"❌ Error listing calls: {e}")
-            print(f"❌ Error type: {type(e)}")
-            import traceback
-            print(f"❌ Traceback: {traceback.format_exc()}")
-            return []
+            raise e
     
     async def get_call_stats(self) -> dict:
         """Get call statistics"""
@@ -642,3 +588,19 @@ class RetellService:
             "success_rate": 0,
             "avg_duration": "0:00"
         }
+    
+    async def list_voices(self) -> List[dict]:
+        """List all available voices from Retell AI"""
+        try:
+            response = self.client.voice.list()
+            return list(response)  # Convert to list if it's not already
+        except Exception as e:
+            raise e
+    
+    async def get_voice(self, voice_id: str) -> Optional[dict]:
+        """Get a specific voice by ID"""
+        try:
+            response = self.client.voice.retrieve(voice_id)
+            return dict(response) if response else None
+        except Exception as e:
+            raise e

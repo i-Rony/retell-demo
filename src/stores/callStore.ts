@@ -46,6 +46,7 @@ export interface CallState {
   error: string | null
   searchTerm: string
   statusFilter: string
+  lastFetched: number | null // Timestamp of last successful fetch
   
   // Real-time call state
   activeCall: Call | null
@@ -66,9 +67,10 @@ export interface CallState {
   initiateCall: (callData: Omit<Call, 'id' | 'timestamp' | 'status' | 'confidence' | 'transcript' | 'extractedData' | 'outcome'>) => Promise<void>
   endCall: (id: string, outcome: string, extractedData: ExtractedData, transcript: CallTranscriptEntry[]) => void
   cancelCall: (id: string) => void
-  fetchCalls: () => Promise<void>
+  fetchCalls: (forceRefresh?: boolean) => Promise<void>
+  ensureCallsLoaded: () => Promise<void>
+  invalidateCache: () => void
   fetchCallDetails: (callId: string) => Promise<Call | null>
-  fetchCallStats: () => Promise<void>
   clearLocalStorage: () => void
   
   // Webhook event handlers
@@ -90,7 +92,66 @@ export interface CallState {
   }
 }
 
+// Cache duration: 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
+const STORAGE_KEY = 'retell_calls_cache';
 
+// Load cached data from localStorage
+const loadCachedCalls = (): { calls: Call[]; lastFetched: number } | null => {
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      const data = JSON.parse(cached);
+      // Check if cache is still valid (within CACHE_DURATION)
+      if (Date.now() - data.lastFetched < CACHE_DURATION) {
+        return data;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load cached calls:', error);
+  }
+  return null;
+};
+
+// Save data to localStorage
+const saveCachedCalls = (calls: Call[], lastFetched: number) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ calls, lastFetched }));
+  } catch (error) {
+    console.warn('Failed to save calls to cache:', error);
+  }
+};
+
+// Helper function to map backend call to frontend format
+const mapBackendCallToFrontend = (backendCall: any): Call => ({
+  id: backendCall.id,
+  driver: backendCall.driver_name,
+  phone: backendCall.phone_number,
+  loadNumber: backendCall.load_number,
+  agentId: backendCall.agent_id,
+  agent: backendCall.agent_name || 'Unknown Agent',
+  scenario: backendCall.scenario,
+  status: backendCall.status,
+  duration: backendCall.duration,
+  timestamp: backendCall.timestamp,
+  outcome: backendCall.outcome,
+  confidence: backendCall.confidence,
+  extractedData: {
+    currentLocation: backendCall.extracted_data?.current_location || '',
+    estimatedArrival: backendCall.extracted_data?.estimated_arrival || '',
+    driverStatus: backendCall.extracted_data?.driver_status || '',
+    issues: backendCall.extracted_data?.issues || '',
+    ...backendCall.extracted_data // Preserve any additional fields
+  },
+  transcript: backendCall.transcript || [],
+  pickupLocation: backendCall.pickup_location,
+  deliveryLocation: backendCall.delivery_location,
+  estimatedPickupTime: backendCall.estimated_pickup_time,
+  notes: backendCall.notes,
+});
+
+// Initialize with cached data if available
+const cachedData = loadCachedCalls();
 
 // Helper functions
 const calculateDuration = (start: Date, end: Date): string => {
@@ -148,122 +209,87 @@ const calculateAvgConfidence = (calls: Call[]): number => {
 export const useCallStore = create<CallState>()(
   subscribeWithSelector(
     (set, get) => ({
-        // Initial state - Start empty, fetch from API
-        calls: [],
+        // Initial state - Start with cached data, load from API if cache is stale
+        calls: cachedData?.calls || [],
         selectedCall: null,
         isLoading: false,
         error: null,
         searchTerm: '',
         statusFilter: 'all',
+        lastFetched: cachedData?.lastFetched || null,
         activeCall: null,
         callProgress: 0,
 
     // Actions
     setCalls: (calls) => set({ calls }),
 
-    // Fetch calls from backend
-    fetchCalls: async () => {
-      console.log('🔄 Fetching calls from API...')
-      set({ isLoading: true, error: null })
+    // Fetch calls from backend with caching
+    fetchCalls: async (forceRefresh = false) => {
+      const { isLoading, lastFetched } = get();
+      
+      // Don't fetch if already loading
+      if (isLoading) return;
+      
+      // Check if we have fresh cache (unless forcing refresh)
+      if (!forceRefresh && lastFetched && (Date.now() - lastFetched < CACHE_DURATION)) {
+        return;
+      }
+      set({ isLoading: true, error: null });
       try {
-        const backendCalls = await callApi.getAll()
-        console.log('📊 Raw response from backend:', backendCalls)
-        console.log('📊 Response type:', typeof backendCalls, 'Length:', Array.isArray(backendCalls) ? backendCalls.length : 'not an array')
+        const backendCalls = await callApi.getAll();
         
         // Convert backend snake_case responses to frontend camelCase format
-        const calls: Call[] = backendCalls.map((backendCall: any) => ({
-          id: backendCall.id,
-          driver: backendCall.driver_name,
-          phone: backendCall.phone_number,
-          loadNumber: backendCall.load_number,
-          agentId: backendCall.agent_id,
-          agent: backendCall.agent_name || 'Unknown Agent',
-          scenario: backendCall.scenario,
-          status: backendCall.status,
-          duration: backendCall.duration,
-          timestamp: backendCall.timestamp,
-          outcome: backendCall.outcome,
-          confidence: backendCall.confidence,
-          extractedData: {
-            currentLocation: backendCall.extracted_data?.current_location || '',
-            estimatedArrival: backendCall.extracted_data?.estimated_arrival || '',
-            driverStatus: backendCall.extracted_data?.driver_status || '',
-            issues: backendCall.extracted_data?.issues || '',
-          },
-          transcript: backendCall.transcript || [],
-          pickupLocation: backendCall.pickup_location,
-          deliveryLocation: backendCall.delivery_location,
-          estimatedPickupTime: backendCall.estimated_pickup_time,
-          notes: backendCall.notes,
-        }))
+        const calls: Call[] = backendCalls.map(mapBackendCallToFrontend);
+        const timestamp = Date.now();
         
-        set({ calls, isLoading: false })
-        console.log(`✅ Loaded ${calls.length} calls from Retell AI API (fresh data)`)
+        set({ calls, isLoading: false, lastFetched: timestamp, error: null });
         
-        if (calls.length === 0) {
-          console.log('ℹ️ No calls found. This means either:')
-          console.log('   1. No calls have been made through the system yet')
-          console.log('   2. Retell AI API key might need verification')
-          console.log('   3. Calls exist but are not being mapped correctly')
-          console.log('💡 Try making a test call from the Call Trigger page first')
-        }
+        // Save to localStorage
+        saveCachedCalls(calls, timestamp);
       } catch (error) {
-        console.error('❌ Failed to fetch calls:', error)
-        set({ error: 'Failed to load calls', isLoading: false })
+        console.error('❌ Failed to fetch calls:', error);
+        set({ 
+          error: error instanceof Error ? error.message : 'Failed to load calls', 
+          isLoading: false 
+        });
       }
+    },
+
+    ensureCallsLoaded: async () => {
+      const { lastFetched, isLoading } = get();
+      
+      // Only fetch if we don't have fresh data and not currently loading
+      const isCacheValid = lastFetched && (Date.now() - lastFetched < CACHE_DURATION);
+      if (!isCacheValid && !isLoading) {
+        await get().fetchCalls();
+      }
+    },
+
+    invalidateCache: () => {
+      localStorage.removeItem(STORAGE_KEY);
+      set({ lastFetched: null });
     },
 
     fetchCallDetails: async (callId: string): Promise<Call | null> => {
-      console.log(`🔍 Fetching detailed call data for ${callId}...`)
       try {
-        const backendCall = await callApi.getById(callId)
+        const backendCall = await callApi.getById(callId);
         
         // Convert backend snake_case response to frontend camelCase format
-        const detailedCall: Call = {
-          id: backendCall.id,
-          driver: backendCall.driver_name,
-          phone: backendCall.phone_number,
-          loadNumber: backendCall.load_number,
-          agentId: backendCall.agent_id,
-          agent: backendCall.agent_name || 'Unknown Agent',
-          scenario: backendCall.scenario,
-          status: backendCall.status,
-          duration: backendCall.duration,
-          timestamp: backendCall.timestamp,
-          outcome: backendCall.outcome,
-          confidence: backendCall.confidence,
-          extractedData: {
-            currentLocation: backendCall.extracted_data?.current_location || '',
-            estimatedArrival: backendCall.extracted_data?.estimated_arrival || '',
-            driverStatus: backendCall.extracted_data?.driver_status || '',
-            issues: backendCall.extracted_data?.issues || '',
-          },
-          transcript: backendCall.transcript || [],
-          pickupLocation: backendCall.pickup_location,
-          deliveryLocation: backendCall.delivery_location,
-          estimatedPickupTime: backendCall.estimated_pickup_time,
-          notes: backendCall.notes,
-        }
+        const detailedCall: Call = mapBackendCallToFrontend(backendCall);
         
         // Update the call in the store with the detailed data
-        get().updateCall(callId, detailedCall)
+        get().updateCall(callId, detailedCall);
         
-        console.log(`✅ Loaded detailed call data for ${callId}`)
-        return detailedCall
+        // Update cache with the detailed call data
+        const { calls, lastFetched } = get();
+        if (lastFetched) {
+          saveCachedCalls(calls, lastFetched);
+        }
+        
+        return detailedCall;
       } catch (error) {
-        console.error(`❌ Failed to fetch call details for ${callId}:`, error)
-        return null
-      }
-    },
-
-    fetchCallStats: async () => {
-      console.log('📊 Fetching call stats from API...')
-      try {
-        const stats = await callApi.getStats()
-        console.log('✅ Loaded call stats:', stats)
-        // Note: You might want to store stats in state if needed
-      } catch (error) {
-        console.error('❌ Failed to fetch call stats:', error)
+        console.error(`❌ Failed to fetch call details for ${callId}:`, error);
+        return null;
       }
     },
 
@@ -276,17 +302,14 @@ export const useCallStore = create<CallState>()(
       set((state) => ({
         calls: [newCall, ...state.calls], // Add to beginning for chronological order
       }))
-      console.log(`📋 STORE: Added new call - ${newCall.id}`);
       return newCall
     },
 
     updateCall: (id, updates) => {
-      console.log(`💾 ZUSTAND STORE: Updating call ${id} with:`, updates);
       set((state) => {
         const updatedCalls = state.calls.map((call) =>
           call.id === id ? { ...call, ...updates } : call
         );
-        console.log(`✅ ZUSTAND STORE: Call ${id} updated successfully. Total calls in store: ${updatedCalls.length}`);
         return { calls: updatedCalls };
       })
     },
@@ -306,7 +329,6 @@ export const useCallStore = create<CallState>()(
 
     // Call management - DEMO API INTEGRATION
     initiateCall: async (callData) => {
-      console.log('📞 Initiating call via API...')
       set({ isLoading: true, error: null })
       
       try {
@@ -315,25 +337,13 @@ export const useCallStore = create<CallState>()(
         
         // Convert backend snake_case response to frontend camelCase format
         const newCall: Call = {
-          id: backendResponse.id,
+          ...mapBackendCallToFrontend(backendResponse),
+          // Override with any provided callData if backend doesn't have it
           driver: backendResponse.driver_name || callData.driver,
           phone: backendResponse.phone_number || callData.phone,
           loadNumber: backendResponse.load_number || callData.loadNumber,
           agentId: backendResponse.agent_id || callData.agentId,
           agent: callData.agent,
-          scenario: backendResponse.scenario || callData.scenario,
-          status: backendResponse.status || 'pending',
-          duration: backendResponse.duration || '0:00',
-          timestamp: backendResponse.timestamp || new Date().toISOString(),
-          outcome: backendResponse.outcome || 'Call initiated...',
-          confidence: backendResponse.confidence || 0,
-          extractedData: {
-            currentLocation: backendResponse.extracted_data?.current_location || '',
-            estimatedArrival: backendResponse.extracted_data?.estimated_arrival || '',
-            driverStatus: backendResponse.extracted_data?.driver_status || '',
-            issues: backendResponse.extracted_data?.issues || '',
-          },
-          transcript: backendResponse.transcript || [],
           pickupLocation: backendResponse.pickup_location || callData.pickupLocation,
           deliveryLocation: backendResponse.delivery_location || callData.deliveryLocation,
           estimatedPickupTime: backendResponse.estimated_pickup_time || callData.estimatedPickupTime,
@@ -346,14 +356,14 @@ export const useCallStore = create<CallState>()(
           activeCall: newCall,
           callProgress: 0,
           isLoading: false
-        }))
+        }));
 
-        console.log(`✅ Call initiated: ${newCall.id}`)
-        console.log(`📊 Call outcome: ${newCall.outcome}`)
+        // Invalidate cache since we have new data
+        get().invalidateCache();
 
         // Since this is a demo, the call is already "completed" by the backend
         // In real integration, this would be handled by webhooks
-        set({ activeCall: null, callProgress: 100 })
+        set({ activeCall: null, callProgress: 100 });
 
       } catch (error) {
         console.error('❌ Failed to initiate call:', error)
@@ -418,7 +428,6 @@ export const useCallStore = create<CallState>()(
     },
 
     handleCallEnded: (callId, callData) => {
-      console.log(`📞 STORE: Call ended - ${callId}`);
       
       const duration = callData.duration_ms ? 
         `${Math.floor(callData.duration_ms / 60000)}:${Math.floor((callData.duration_ms % 60000) / 1000).toString().padStart(2, '0')}` : 
@@ -443,8 +452,6 @@ export const useCallStore = create<CallState>()(
     },
 
     handleCallAnalyzed: (callId, analysisData) => {
-      console.log(`📞 STORE: Call analyzed - ${callId}`);
-      
       const analysis = analysisData.call_analysis || {};
       get().updateCall(callId, {
         confidence: analysis.call_successful ? 0.95 : 0.3,
@@ -509,10 +516,7 @@ export const useCallStore = create<CallState>()(
         
         keysToRemove.forEach(key => {
           localStorage.removeItem(key);
-          console.log(`🗑️ Cleared ${key} from localStorage`);
         });
-        
-        console.log('✅ All localStorage cleared - fetching fresh data from API');
       } catch (error) {
         console.error('❌ Failed to clear localStorage:', error);
       }

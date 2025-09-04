@@ -6,21 +6,15 @@ from app.core.config import settings
 
 router = APIRouter()
 
-# Initialize with debug logging
-print(f"🔧 Initializing RetellService with API key: {'✅ Present' if settings.RETELL_API_KEY else '❌ Missing'}")
-print(f"🔧 API key length: {len(settings.RETELL_API_KEY) if settings.RETELL_API_KEY else 0}")
 retell_service = RetellService(settings.RETELL_API_KEY)
 
 @router.get("/", response_model=List[Call])
 async def get_calls():
     """Get all calls from Retell AI - simplified to match Retell AI documentation"""
     try:
-        print(f"🔗 API endpoint called: GET /calls/ - fetching all calls from Retell AI")
         calls = await retell_service.list_calls()
-        print(f"✅ Returning {len(calls)} calls to frontend")
         return calls
     except Exception as e:
-        print(f"❌ Error in get_calls endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{call_id}", response_model=Call)
@@ -121,28 +115,3 @@ async def get_call_stats():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/debug/retell-api")
-async def debug_retell_api():
-    """Debug endpoint to test Retell AI API directly"""
-    try:
-        print("🔍 Testing direct Retell AI API access...")
-        
-        # Test if we can connect to Retell AI
-        raw_response = retell_service.client.call.list()
-        response_list = list(raw_response)
-        
-        return {
-            "success": True,
-            "api_key_configured": bool(retell_service.client.api_key),
-            "api_key_length": len(retell_service.client.api_key) if retell_service.client.api_key else 0,
-            "calls_count": len(response_list),
-            "sample_call": response_list[0] if response_list else None,
-            "message": f"Found {len(response_list)} calls in Retell AI account"
-        }
-    except Exception as e:
-        print(f"❌ Debug API error: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to connect to Retell AI API"
-        }

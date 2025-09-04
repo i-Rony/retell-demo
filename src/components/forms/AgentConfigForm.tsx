@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Save, Play, Volume2, Settings2, MessageSquare, Zap } from "lucide-react";
 import { useAgentStore, type Agent } from "@/stores/agentStore";
+import { useVoiceStore } from "@/stores/voiceStore";
 
 interface AgentConfigFormProps {
   agent?: Agent;
@@ -20,6 +21,7 @@ interface AgentConfigFormProps {
 
 export default function AgentConfigForm({ agent, onSave, onCancel }: AgentConfigFormProps) {
   const { addAgent, updateAgent } = useAgentStore();
+  const { voices, ensureVoicesLoaded, previewVoice, stopCurrentAudio, isLoading: voicesLoading } = useVoiceStore();
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: agent?.name || "",
@@ -28,94 +30,32 @@ export default function AgentConfigForm({ agent, onSave, onCancel }: AgentConfig
     temperature: agent?.temperature || 0.7,
     speed: agent?.speed || 1.0,
     volume: agent?.volume || 1.0,
-    prompt: agent?.prompt || `Role & Persona
-You are Dispatch, an AI voice agent responsible for calling truck drivers to perform check calls about their current status and safety. Speak in a natural, calm, and professional tone, like a helpful dispatcher. Use short, clear sentences. Use occasional filler words and backchanneling ("okay," "I see," "got it") to sound human. Be patient but stay on track.
-
-IMPORTANT CONTEXT: You already have this driver information:
-- Driver Name: {{driver_name}}
-- Phone Number: {{phone_number}}
-- Load Number: {{load_number}}
-
-Do NOT ask for this information since you already have it. Use it to personalize the conversation.
-
-Core Objectives
-Greet the driver by name and reference the load number.
-Collect all required structured information for the dispatch system.
-If an emergency is mentioned, immediately abandon the normal script and switch to Emergency Escalation mode.
-If the driver is uncooperative, noisy, or gives conflicting info, handle gracefully.
-At the end of the call, confirm you will update Dispatch and thank the driver.
-
-Conversation Flow – Normal Check-In
-Start: "Hi {{driver_name}}, this is Dispatch with a check call on load {{load_number}}. Can you give me an update on your status?"
-
-Based on response, adapt:
-If in transit: Ask for current location and ETA.
-If delayed: Ask reason for delay and updated ETA.
-If arrived: Ask if unloading has started, and confirm unloading status.
-End: Remind driver to send proof of delivery (POD) after unloading. Confirm acknowledgment.
-
-Structured Data to Collect (Normal Call):
-call_outcome: "In-Transit Update" OR "Arrival Confirmation"
-driver_status: "Driving" OR "Delayed" OR "Arrived" OR "Unloading"
-current_location: text
-eta: text
-delay_reason: "Traffic" / "Weather" / "Mechanical" / "Other" / "None"
-unloading_status: text or "N/A"
-pod_reminder_acknowledged: true/false
-
-Conversation Flow – Emergency Escalation
-If the driver says anything about an emergency (e.g., "accident," "blowout," "medical issue"):
-
-Interrupt and switch to emergency mode.
-Calmly confirm safety: "Are you and everyone else safe right now?"
-Ask emergency type (Accident / Breakdown / Medical / Other).
-Ask location.
-Ask if load is secure.
-Reassure: "Thank you, I'm connecting you to a live dispatcher immediately."
-End normal conversation thread.
-
-Structured Data to Collect (Emergency Call):
-call_outcome: "Emergency Escalation"
-emergency_type: "Accident" OR "Breakdown" OR "Medical" OR "Other"
-safety_status: text
-injury_status: text
-emergency_location: text
-load_secure: true/false
-escalation_status: "Connected to Human Dispatcher"
-
-Special Handling Rules
-Uncooperative Driver: If driver only gives one-word answers ("good," "fine"), politely probe: "Could you tell me where you are right now?" If still unresponsive after 3 attempts, say: "Okay, I'll note this check call as incomplete and a dispatcher will follow up. Thank you." End call.
-Noisy Environment: If speech-to-text is unclear, politely ask them to repeat. If unclear 3 times, escalate: "I'm having trouble hearing you. Let me connect you to a dispatcher directly."
-Conflicting Info: If driver's stated location doesn't match GPS, don't confront. Say: "Thanks for the update, I'll make a note of that." Log discrepancy in transcript.
-
-Style Guidelines
-Always speak respectfully and clearly.
-Use short, natural sentences (avoid robotic wording).
-Allow the driver to interrupt; pause when they do.
-Never argue or push aggressively.
-Prioritize safety over routine check-in if an emergency arises.`,
+    prompt: agent?.prompt || "",
     backchannelEnabled: agent?.backchannelEnabled ?? true,
     backchannelFrequency: agent?.backchannelFrequency || 0.8,
-    backchannelWords: agent?.backchannelWords || ["mm-hmm", "okay", "I see", "right"],
+    backchannelWords: agent?.backchannelWords || [],
     interruptionSensitivity: agent?.interruptionSensitivity || 0.7,
     responsiveness: agent?.responsiveness || 0.9,
-    pronunciation: agent?.pronunciation || [
-      { word: "ETA", pronunciation: "E-T-A" },
-      { word: "GPS", pronunciation: "G-P-S" }
-    ],
-    boostedKeywords: agent?.boostedKeywords || ["delivery", "pickup", "location", "driver", "load", "emergency"]
+    pronunciation: agent?.pronunciation || [],
+    boostedKeywords: agent?.boostedKeywords || []
   });
 
-  const voices = [
-    { id: "11labs-Adrian", name: "11Labs Adrian", description: "Clear, professional voice (Male)" },
-    { id: "openai-Alloy", name: "OpenAI Alloy", description: "Neutral, balanced tone (Male)" },
-    { id: "openai-Echo", name: "OpenAI Echo", description: "Warm, friendly voice (Male)" },
-    { id: "openai-Nova", name: "OpenAI Nova", description: "Clear, professional tone (Female)" },
-    { id: "openai-Shimmer", name: "OpenAI Shimmer", description: "Gentle, calming voice (Female)" },
-    { id: "openai-Onyx", name: "OpenAI Onyx", description: "Deep, authoritative tone (Male)" },
-    { id: "deepgram-Angus", name: "Deepgram Angus", description: "Natural, conversational voice (Male)" },
-    { id: "11labs-Julia", name: "11Labs Julia", description: "Professional female voice (Female)" }
-  ];
+  // Load voices on component mount (only if not already loaded)
+  useEffect(() => {
+    ensureVoicesLoaded();
+  }, [ensureVoicesLoaded]);
+
+  // Cleanup audio on component unmount
+  useEffect(() => {
+    return () => {
+      stopCurrentAudio();
+    };
+  }, [stopCurrentAudio]);
+
+  // Validation helper
+  const isFormValid = () => {
+    return formData.name.trim() !== "" && formData.prompt.trim() !== "";
+  };
 
   const handleSave = async () => {
     try {
@@ -157,7 +97,6 @@ Prioritize safety over routine check-in if an emergency arises.`,
       onSave();
       
     } catch (error) {
-      console.error("Error saving agent:", error);
       toast.error("Failed to save agent", {
         description: error instanceof Error ? error.message : "An unknown error occurred"
       });
@@ -189,31 +128,14 @@ Prioritize safety over routine check-in if an emergency arises.`,
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid gap-6 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Agent Name *</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({...formData, name: e.target.value})}
-                    placeholder="e.g., Driver Check-in Agent"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="voice">Voice Selection</Label>
-                  <select 
-                    id="voice"
-                    value={formData.voice}
-                    onChange={(e) => setFormData({...formData, voice: e.target.value})}
-                    className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                  >
-                    {voices.map((voice) => (
-                      <option key={voice.id} value={voice.id}>
-                        {voice.name} - {voice.description}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="name">Agent Name *</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  placeholder="e.g., Driver Check-in Agent"
+                />
               </div>
               
               <div className="space-y-2">
@@ -249,7 +171,7 @@ Prioritize safety over routine check-in if an emergency arises.`,
                     id="prompt"
                     value={formData.prompt}
                     onChange={(e) => setFormData({...formData, prompt: e.target.value})}
-                    placeholder="Define your agent's role, goals, and behavior..."
+                    placeholder="Enter a detailed system prompt that defines your agent's role, personality, goals, and conversation flow. For example, specify how the agent should greet callers, what information to collect, and how to handle different scenarios..."
                     rows={12}
                     className="font-mono text-sm"
                   />
@@ -290,6 +212,54 @@ Prioritize safety over routine check-in if an emergency arises.`,
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* Voice Selection */}
+              <div className="space-y-3 p-4 border rounded-lg bg-muted/30">
+                <Label htmlFor="voice" className="text-base font-medium">Voice Selection</Label>
+                <div className="flex gap-3">
+                  <select 
+                    id="voice"
+                    value={formData.voice}
+                    onChange={(e) => setFormData({...formData, voice: e.target.value})}
+                    className="flex-[3] px-3 py-2 border border-input rounded-md bg-background"
+                    disabled={voicesLoading}
+                  >
+                    {voicesLoading ? (
+                      <option>Loading voices...</option>
+                    ) : voices.length === 0 ? (
+                      <option>No voices available</option>
+                    ) : (
+                      voices.map((voice) => (
+                        <option key={voice.voice_id} value={voice.voice_id}>
+                          {voice.voice_name} ({voice.provider}) - {voice.gender}, {voice.accent} {voice.age && `(${voice.age})`}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  <Button 
+                    variant="outline" 
+                    disabled={voicesLoading || voices.length === 0}
+                    onClick={async () => {
+                      try {
+                        await previewVoice(formData.voice);
+                        
+                        const selectedVoice = voices.find(v => v.voice_id === formData.voice);
+                        toast.success("Voice Preview", {
+                          description: `Playing ${selectedVoice?.voice_name || formData.voice} preview`
+                        });
+                      } catch (error) {
+                        toast.error("Preview Failed", {
+                          description: error instanceof Error ? error.message : "Could not play voice preview"
+                        });
+                      }
+                    }}
+                    className="flex-1"
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    {voicesLoading ? "Loading..." : "Voice Preview"}
+                  </Button>
+                </div>
+              </div>
+
               <div className="grid gap-8 md:grid-cols-2">
                 <div className="space-y-6">
                   <div className="space-y-3">
@@ -340,82 +310,6 @@ Prioritize safety over routine check-in if an emergency arises.`,
                     />
                   </div>
 
-                  <div className="flex items-center justify-center p-4 border rounded-md bg-muted/30">
-                    <Button 
-                      variant="outline" 
-                      className="w-full"
-                      onClick={() => {
-                        // Play voice preview with current form settings
-                        const utterance = new SpeechSynthesisUtterance(`Hello, this is ${formData.name || 'your agent'}. I'm ready to help with your dispatch needs.`);
-                        utterance.rate = formData.speed || 1.0;
-                        utterance.volume = formData.volume || 1.0;
-                        
-                        // Function to get voices and play
-                        const getVoicesAndSpeak = () => {
-                          const voices = speechSynthesis.getVoices();
-                          
-                          if (voices.length === 0) {
-                            setTimeout(getVoicesAndSpeak, 100);
-                            return;
-                          }
-                          
-                          const voiceId = formData.voice.toLowerCase();
-                          let matchingVoice = null;
-                          
-                          // Better gender-based voice mapping
-                          if (voiceId.includes('julia') || voiceId.includes('shimmer') || voiceId.includes('nova')) {
-                            // Female voices
-                            matchingVoice = voices.find(voice => {
-                              const name = voice.name.toLowerCase();
-                              return name.includes('female') || 
-                                     name.includes('woman') || 
-                                     name.includes('samantha') || 
-                                     name.includes('victoria') || 
-                                     name.includes('karen') || 
-                                     name.includes('zira') || 
-                                     name.includes('susan') ||
-                                     name.includes('fiona') ||
-                                     name.includes('vicki');
-                            });
-                          } else {
-                            // Male voices  
-                            matchingVoice = voices.find(voice => {
-                              const name = voice.name.toLowerCase();
-                              return name.includes('male') || 
-                                     name.includes('man') || 
-                                     name.includes('david') || 
-                                     name.includes('mark') || 
-                                     name.includes('daniel') || 
-                                     name.includes('alex') ||
-                                     name.includes('fred') ||
-                                     name.includes('thomas');
-                            });
-                          }
-                          
-                          // Fallback
-                          if (!matchingVoice) {
-                            matchingVoice = voices.find(voice => voice.lang.startsWith('en')) || voices[0];
-                          }
-                          
-                          if (matchingVoice) {
-                            utterance.voice = matchingVoice;
-                            console.log(`Preview using voice: ${matchingVoice.name} for ${formData.voice}`);
-                          }
-                          
-                          speechSynthesis.speak(utterance);
-                        };
-                        
-                        getVoicesAndSpeak();
-                        
-                        toast.success("Voice Preview", {
-                          description: `Testing ${formData.voice} voice settings`
-                        });
-                      }}
-                    >
-                      <Play className="h-4 w-4 mr-2" />
-                      Test Voice Preview
-                    </Button>
-                  </div>
                 </div>
               </div>
             </CardContent>
@@ -570,7 +464,7 @@ Prioritize safety over routine check-in if an emergency arises.`,
         <Button variant="outline" onClick={onCancel}>
           Cancel
         </Button>
-        <Button onClick={handleSave} disabled={isLoading}>
+        <Button onClick={handleSave} disabled={isLoading || !isFormValid()}>
           <Save className="h-4 w-4 mr-2" />
           {isLoading ? "Saving..." : (agent ? "Update Agent" : "Create Agent")}
         </Button>
